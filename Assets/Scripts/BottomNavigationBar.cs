@@ -116,6 +116,27 @@ public class BottomNavigationBar : MonoBehaviour
         return currentTabIndex;
     }
 
+    /// <summary>
+    /// 모든 탭 패널을 비활성화하고 색상을 기본값으로 리셋합니다.
+    /// 로그아웃 시 호출됩니다.
+    /// </summary>
+    public void DeactivateAllTabs()
+    {
+        for (int i = 0; i < tabButtons.Length; i++)
+        {
+            if (i < tabIcons.Length && tabIcons[i] != null)
+                tabIcons[i].color = defaultColor;
+
+            if (i < tabTexts.Length && tabTexts[i] != null)
+                tabTexts[i].color = defaultColor;
+
+            if (i < tabPanels.Length && tabPanels[i] != null)
+                tabPanels[i].SetActive(false);
+        }
+
+        currentTabIndex = -1;
+    }
+
     private void OnDestroy()
     {
         // 이벤트 리스너 정리

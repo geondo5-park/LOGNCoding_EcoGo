@@ -1,6 +1,6 @@
 using UnityEngine;
 using UnityEngine.UI;
-using UnityEngine.SceneManagement;
+
 using TMPro;
 using Firebase;
 using Firebase.Auth;
@@ -33,9 +33,22 @@ public class FirebaseAuthManager : MonoBehaviour
     [Tooltip("로딩 중 표시할 오브젝트 (선택사항)")]
     [SerializeField] private GameObject loadingIndicator;
 
-    [Header("=== 씬 설정 ===")]
-    [Tooltip("로그인 성공 후 이동할 씬 이름")]
-    [SerializeField] private string mainSceneName = "SampleScene";
+    [Header("=== 로그인 후 전환 ===")]
+    [Tooltip("로그인 성공 후 활성화할 네비게이션 바")]
+    [SerializeField] private BottomNavigationBar navigationBar;
+
+    [Tooltip("로그인 성공 후 활성화할 네비게이션 바 GameObject")]
+    [SerializeField] private GameObject navigationBarObject;
+
+    [Tooltip("로그인 성공 후 비활성화할 로그인 패널")]
+    [SerializeField] private GameObject loginPanel;
+
+    [Header("=== MyPage Data (Pre-fetch) ===")]
+    [Tooltip("MyPage profile script")]
+    [SerializeField] private MyPageProfile myPageProfile;
+
+    [Tooltip("MyPage plant stats script")]
+    [SerializeField] private MyPagePlantStats myPagePlantStats;
 
     [Header("=== 유효성 검사 ===")]
     [Tooltip("LoginValidator 컴포넌트 (같은 오브젝트 또는 별도 오브젝트에 부착)")]
@@ -45,6 +58,9 @@ public class FirebaseAuthManager : MonoBehaviour
     private FirebaseAuth auth;
     private FirebaseUser currentUser;
     private bool isFirebaseReady = false;
+
+    // 자동 로그인 플래그 (Firebase 콜백은 메인 스레드가 아니므로 Update에서 처리)
+    private bool pendingAutoLogin = false;
 
     // ─── 프로퍼티 ───
     public FirebaseUser CurrentUser => currentUser;
@@ -77,6 +93,17 @@ public class FirebaseAuthManager : MonoBehaviour
         ClearStatus();
     }
 
+    private void Update()
+    {
+        // 자동 로그인 대기 중이면 메인 스레드에서 UI 전환 수행
+        if (pendingAutoLogin)
+        {
+            pendingAutoLogin = false;
+            Debug.Log($"[FirebaseAuthManager] 자동 로그인 처리: {currentUser.Email}");
+            GoToMainUI();
+        }
+    }
+
     #region Firebase 초기화
 
     /// <summary>
@@ -98,7 +125,10 @@ public class FirebaseAuthManager : MonoBehaviour
                 Debug.Log("[FirebaseAuthManager] Firebase 초기화 성공!");
 
                 if (currentUser != null)
+                {
                     Debug.Log($"[FirebaseAuthManager] 이미 로그인됨: {currentUser.Email}");
+                    pendingAutoLogin = true; // 메인 스레드에서 UI 전환 예약
+                }
             }
             else
             {
@@ -151,13 +181,13 @@ public class FirebaseAuthManager : MonoBehaviour
     {
         if (!isFirebaseReady)
         {
-            SetStatus("Firebase가 아직 초기화되지 않았습니다.", true);
+            SetStatus("Firebase is not ready yet.", true);
             return;
         }
 
         if (string.IsNullOrEmpty(email) || string.IsNullOrEmpty(password))
         {
-            SetStatus("이메일과 비밀번호를 입력해주세요.", true);
+            SetStatus("Please enter your email and password.", true);
             return;
         }
 
@@ -171,21 +201,23 @@ public class FirebaseAuthManager : MonoBehaviour
             currentUser = result.User;
 
             Debug.Log($"[FirebaseAuthManager] 로그인 성공! 사용자: {currentUser.Email}");
-            SetStatus("로그인 성공!", false);
+            SetStatus("Login successful!", false);
 
-            // 로그인 성공 후 메인 씬으로 이동
+            // 로그인 성공 후 잠시 대기 후 메인 UI로 전환
             await Task.Delay(500);
-            SceneManager.LoadScene(mainSceneName);
+            GoToMainUI();
         }
         catch (FirebaseException ex)
         {
             string errorMessage = GetFirebaseErrorMessage(ex);
             SetStatus(errorMessage, true);
-            Debug.LogWarning($"[FirebaseAuthManager] 로그인 실패: {ex.Message}");
+            Debug.LogWarning($"[FirebaseAuthManager] Login failed - ErrorCode: {(AuthError)ex.ErrorCode}, Message: {ex.Message}");
+            if (ex.InnerException != null)
+                Debug.LogWarning($"[FirebaseAuthManager] InnerException: {ex.InnerException.Message}");
         }
         catch (System.Exception ex)
         {
-            SetStatus("로그인 중 오류가 발생했습니다.", true);
+            SetStatus("An error occurred during login.", true);
             Debug.LogError($"[FirebaseAuthManager] 예외 발생: {ex.Message}");
         }
         finally
@@ -212,6 +244,24 @@ public class FirebaseAuthManager : MonoBehaviour
         }
     }
 
+    /// <summary>
+    /// 로그아웃 후 로그인 화면으로 돌아가기
+    /// </summary>
+    public void GoToLoginUI()
+    {
+        // 모든 탭 패널 비활성화 (MyPage 등)
+        if (navigationBar != null)
+            navigationBar.DeactivateAllTabs();
+
+        if (navigationBarObject != null)
+            navigationBarObject.SetActive(false);
+
+        if (loginPanel != null)
+            loginPanel.SetActive(true);
+
+        ClearStatus();
+    }
+
     #endregion
 
     #region 유틸리티
@@ -228,28 +278,60 @@ public class FirebaseAuthManager : MonoBehaviour
     }
 
     /// <summary>
-    /// Firebase 에러 코드에 따른 한국어 에러 메시지 반환
+    /// Returns error message based on Firebase error code
     /// </summary>
     private string GetFirebaseErrorMessage(FirebaseException ex)
     {
         AuthError errorCode = (AuthError)ex.ErrorCode;
 
+        // ex.Message + InnerException 메시지를 합쳐서 패턴 매칭
+        string message = ex.Message ?? "";
+        if (ex.InnerException != null)
+            message += " " + ex.InnerException.Message;
+        message = message.ToUpperInvariant();
+
         switch (errorCode)
         {
             case AuthError.WrongPassword:
-                return "비밀번호가 올바르지 않습니다.";
+                return "Incorrect password.";
             case AuthError.UserNotFound:
-                return "등록되지 않은 이메일입니다.";
+                return "Email not found.";
             case AuthError.InvalidEmail:
-                return "이메일 형식이 올바르지 않습니다.";
+                return "Invalid email format.";
             case AuthError.UserDisabled:
-                return "비활성화된 계정입니다. 관리자에게 문의하세요.";
+                return "This account has been disabled. Please contact support.";
             case AuthError.TooManyRequests:
-                return "너무 많은 시도가 있었습니다.\n잠시 후 다시 시도해주세요.";
+                return "Too many attempts.\nPlease try again later.";
             case AuthError.NetworkRequestFailed:
-                return "네트워크 연결을 확인해주세요.";
+                return "Please check your network connection.";
             default:
-                return $"오류가 발생했습니다. ({errorCode})";
+                // Firebase SDK가 Failure로 내려올 때 메시지 내용으로 분기
+                if (message.Contains("INVALID_LOGIN_CREDENTIALS") ||
+                    message.Contains("WRONG_PASSWORD") ||
+                    message.Contains("INVALID_PASSWORD") ||
+                    message.Contains("INVALID_CREDENTIAL"))
+                    return "Incorrect email or password.";
+
+                if (message.Contains("USER_NOT_FOUND"))
+                    return "Email not found.";
+
+                if (message.Contains("INVALID_EMAIL"))
+                    return "Invalid email format.";
+
+                if (message.Contains("USER_DISABLED"))
+                    return "This account has been disabled. Please contact support.";
+
+                if (message.Contains("TOO_MANY_ATTEMPTS") || message.Contains("TOO_MANY_REQUESTS"))
+                    return "Too many attempts.\nPlease try again later.";
+
+                if (message.Contains("NETWORK"))
+                    return "Please check your network connection.";
+
+                // INTERNAL 에러는 대부분 잘못된 인증 정보
+                if (message.Contains("INTERNAL"))
+                    return "Incorrect email or password.";
+
+                return $"An error occurred. ({errorCode})";
         }
     }
 
@@ -272,6 +354,29 @@ public class FirebaseAuthManager : MonoBehaviour
     {
         if (loadingIndicator != null)
             loadingIndicator.SetActive(isLoading);
+    }
+
+    /// <summary>
+    /// 로그인 패널을 숨기고 네비게이션 바 + 첫 번째 탭을 표시합니다.
+    /// 수동 로그인, 자동 로그인 모두 이 메서드를 사용합니다.
+    /// </summary>
+    private void GoToMainUI()
+    {
+        // Firestore 데이터 미리 가져오기 (MyPage 탭 열기 전에 로드)
+        if (myPageProfile != null)
+            myPageProfile.LoadUserProfile();
+
+        if (myPagePlantStats != null)
+            myPagePlantStats.LoadPlantStats();
+
+        if (loginPanel != null)
+            loginPanel.SetActive(false);
+
+        if (navigationBarObject != null)
+            navigationBarObject.SetActive(true);
+
+        if (navigationBar != null)
+            navigationBar.SelectTab(0);
     }
 
     #endregion
