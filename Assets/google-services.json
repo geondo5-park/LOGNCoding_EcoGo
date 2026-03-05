@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "147128866948",
+    "project_id": "ecogo-pjt",
+    "storage_bucket": "ecogo-pjt.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:147128866948:android:2d4c95d42c4cdbb08acad1",
+        "android_client_info": {
+          "package_name": "com.logncoding.ecogo"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC3esEt3pllRV6R0FBcZXBVjJSiwfrKbak"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

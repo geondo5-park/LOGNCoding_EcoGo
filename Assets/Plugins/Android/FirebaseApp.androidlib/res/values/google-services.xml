@@ -1,0 +1,9 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources xmlns:tools="http://schemas.android.com/tools" tools:keep="@string/gcm_defaultSenderId,@string/google_storage_bucket,@string/project_id,@string/google_api_key,@string/google_crash_reporting_api_key,@string/google_app_id">
+  <string name="gcm_defaultSenderId" translatable="false">147128866948</string>
+  <string name="google_storage_bucket" translatable="false">ecogo-pjt.firebasestorage.app</string>
+  <string name="project_id" translatable="false">ecogo-pjt</string>
+  <string name="google_api_key" translatable="false">AIzaSyC3esEt3pllRV6R0FBcZXBVjJSiwfrKbak</string>
+  <string name="google_crash_reporting_api_key" translatable="false">AIzaSyC3esEt3pllRV6R0FBcZXBVjJSiwfrKbak</string>
+  <string name="google_app_id" translatable="false">1:147128866948:android:2d4c95d42c4cdbb08acad1</string>
+</resources>
