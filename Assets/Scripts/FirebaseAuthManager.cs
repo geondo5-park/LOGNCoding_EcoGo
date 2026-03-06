@@ -292,6 +292,8 @@ public class FirebaseAuthManager : MonoBehaviour
 
         switch (errorCode)
         {
+            case AuthError.InvalidCredential:
+                return "Incorrect email or password.";
             case AuthError.WrongPassword:
                 return "Incorrect password.";
             case AuthError.UserNotFound:
