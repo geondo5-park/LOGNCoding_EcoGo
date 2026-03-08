@@ -299,6 +299,11 @@ PrefabInstance:
       insertIndex: -1
       addedObject: {fileID: 608410487}
   m_SourcePrefab: {fileID: 100100000, guid: 48cb3fb68c91eb94999fd99957eb0cae, type: 3}
+--- !u!4 &331264286 stripped
+Transform:
+  m_CorrespondingSourceObject: {fileID: 2512387469002778308, guid: 48cb3fb68c91eb94999fd99957eb0cae, type: 3}
+  m_PrefabInstance: {fileID: 331264285}
+  m_PrefabAsset: {fileID: 0}
 --- !u!1 &608410480 stripped
 GameObject:
   m_CorrespondingSourceObject: {fileID: 2512387469002778309, guid: 48cb3fb68c91eb94999fd99957eb0cae, type: 3}
@@ -379,12 +384,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::GPSManager
   text_latLong: {fileID: 1958846839}
   text_remainDistance: {fileID: 1873857212}
-  isFirstCardPopup: 0
-  lats:
-  - 37.473221
-  longs:
-  - 126.920905
-  cardPopup: {fileID: 941503036}
+  cardPopup: {fileID: 7449660303056301186, guid: 9cba5d9736b44467dbc02115aa7a1d72, type: 3}
+  arCamera: {fileID: 331264286}
+  spawnDistance: 1.5
+  plantList: []
 --- !u!4 &612176392
 Transform:
   m_ObjectHideFlags: 0

@@ -80,6 +80,23 @@ public class BottomNavigationBar : MonoBehaviour
             return;
         }
 
+        // 3번째 버튼(인덱스 2) 선택 시 AR 씬으로 전환
+        if (tabIndex == 2)
+        {
+            UnityEngine.SceneManagement.SceneManager.LoadScene("AR");
+            return;
+        }
+
+        // 이전 탭의 스크롤을 맨 위로 초기화
+        if (currentTabIndex >= 0 && currentTabIndex < tabPanels.Length && tabPanels[currentTabIndex] != null)
+        {
+            ScrollRect[] scrollRects = tabPanels[currentTabIndex].GetComponentsInChildren<ScrollRect>(true);
+            foreach (var scrollRect in scrollRects)
+            {
+                scrollRect.verticalNormalizedPosition = 1f;
+            }
+        }
+
         currentTabIndex = tabIndex;
 
         // 모든 탭 아이콘 색상, 텍스트 색상, 패널 업데이트
