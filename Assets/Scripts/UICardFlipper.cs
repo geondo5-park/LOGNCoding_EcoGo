@@ -62,44 +62,35 @@ public class UICardFlipper : MonoBehaviour, IPointerClickHandler
     private IEnumerator FlipAnimation()
     {
         isFlipping = true;
-
-        Quaternion startRot = targetImage.transform.localRotation;
-        Quaternion midRot = startRot * Quaternion.Euler(0, 90f, 0); // 90도 회전 (안 보이는 상태)
         
         float elapsed = 0f;
         float halfDuration = flipDuration / 2f;
 
-        // 1. 현재 각도 -> 90도 더 회전시켜서 카드를 얇게(안 보이게) 만듦
+        // 1. 현재 각도(0도)에서 90도로 카드를 얇게 회전시켜 안 보이게 만듦
         while (elapsed < halfDuration)
         {
             elapsed += Time.deltaTime;
-            targetImage.transform.localRotation = Quaternion.Lerp(startRot, midRot, elapsed / halfDuration);
+            float t = elapsed / halfDuration;
+            targetImage.transform.localRotation = Quaternion.Euler(0, Mathf.Lerp(0f, 90f, t), 0);
             yield return null;
         }
 
-        // 2. 안보일 때 이미지를 교체
+        // 2. 카드가 90도로 얇아져 안 보일 때 (가장자리) 이미지 교체
         isFront = !isFront;
         targetImage.sprite = isFront ? frontSprite : backSprite;
 
-        // 거꾸로 뒤집힌 이미지 바로잡기 방지 등을 위해 y축 반사 적용
-        if (!isFront) 
-            targetImage.transform.localRotation = Quaternion.Euler(0, 270f, 0); // 뒷면 시작 각도
-        else 
-            targetImage.transform.localRotation = Quaternion.Euler(0, 90f, 0); // 앞면 시작 각도
-
-        startRot = targetImage.transform.localRotation;
-        Quaternion endRot = startRot * Quaternion.Euler(0, 90f, 0); // 다시 90도 마저 펼침
-
-        // 3. 다시 카드를 펼침
+        // 3. 다시 카드를 펼침 (-90도에서 0도로 회전시켜 계속 한 방향으로 도는 효과 유지)
         elapsed = 0f;
         while (elapsed < halfDuration)
         {
             elapsed += Time.deltaTime;
-            targetImage.transform.localRotation = Quaternion.Lerp(startRot, endRot, elapsed / halfDuration);
+            float t = elapsed / halfDuration;
+            targetImage.transform.localRotation = Quaternion.Euler(0, Mathf.Lerp(-90f, 0f, t), 0);
             yield return null;
         }
         
-        targetImage.transform.localRotation = endRot;
+        // 회전을 완전히 초기화해서 터치가 안 먹히는 뒤집힘 상태(Reverse Graphic)를 방지
+        targetImage.transform.localRotation = Quaternion.identity; 
         isFlipping = false;
     }
 }

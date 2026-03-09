@@ -12,33 +12,26 @@ public class FloatingEffect : MonoBehaviour
     [Tooltip("상하 이동 속도")]
     public float frequency = 1f;
 
-    private Vector3 startPos;
+    private Vector3 startLocalPos;
     private Transform camTransform;
 
     void Start()
     {
-        startPos = transform.position;
-        camTransform = Camera.main.transform;
+        if (Camera.main != null) camTransform = Camera.main.transform;
     }
 
     void Update()
     {
-        // 1. 상하 둥실둥실 효과
-        float newY = startPos.y + Mathf.Sin(Time.time * frequency) * amplitude;
-        transform.position = new Vector3(transform.position.x, newY, transform.position.z);
-
-        // 2. 빌보드 효과 (항상 유저/카메라를 바라보게 함)
         if (camTransform != null)
         {
-            // 카메라가 있는 방향 벡터 계산
-            Vector3 lookDir = camTransform.position - transform.position;
-            lookDir.y = 0; // 위아래로 눕거나 기울어지지 않도록 높이 축 고정
-
-            if (lookDir != Vector3.zero)
-            {
-                // 스프라이트는 기본적으로 반대 방향(-Z)을 바라보아야 카메라 쪽에 앞면이 제대로 보입니다! (투명해지거나 사라짐 방지)
-                transform.rotation = Quaternion.LookRotation(-lookDir);
-            }
+            // 핵심 버그 픽스: ARCore 앵커(위성)가 잘못된 고도를 잡아 땅 밑이나 우주로 날려버리더라도,
+            // X, Z(물리적 지형 위/경도 위치)는 그대로 살려두되, 
+            // Y(상하 높이)만 무조건 유저의 카메라 눈높이(0.5m 아래)로 강제 고정시킵니다!
+            float baseHeight = camTransform.position.y - 0.5f;
+            float floatingOffset = Mathf.Sin(Time.time * frequency) * amplitude;
+            
+            // 월드 포지션을 덮어씌움 (부모인 앵커의 높이를 완전히 무시함)
+            transform.position = new Vector3(transform.position.x, baseHeight + floatingOffset, transform.position.z);
         }
     }
 }

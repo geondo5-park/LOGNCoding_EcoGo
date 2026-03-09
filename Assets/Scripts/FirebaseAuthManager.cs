@@ -43,6 +43,9 @@ public class FirebaseAuthManager : MonoBehaviour
     [Tooltip("로그인 성공 후 비활성화할 로그인 패널")]
     [SerializeField] private GameObject loginPanel;
 
+    [Tooltip("자동 로그인을 확인하는 동안 띄워둘 스플래시 화면 (선택사항)")]
+    [SerializeField] private GameObject splashPanel;
+
     [Header("=== MyPage Data (Pre-fetch) ===")]
     [Tooltip("MyPage profile script")]
     [SerializeField] private MyPageProfile myPageProfile;
@@ -61,6 +64,7 @@ public class FirebaseAuthManager : MonoBehaviour
 
     // 자동 로그인 플래그 (Firebase 콜백은 메인 스레드가 아니므로 Update에서 처리)
     private bool pendingAutoLogin = false;
+    private bool pendingShowLogin = false;
 
     // ─── 프로퍼티 ───
     public FirebaseUser CurrentUser => currentUser;
@@ -74,33 +78,131 @@ public class FirebaseAuthManager : MonoBehaviour
         {
             Instance = this;
             DontDestroyOnLoad(gameObject);
+            InitializeFirebase();
         }
-        else
+        else if (Instance != this)
         {
+            // 다른 씬(AR 등)에서 Home 씬으로 돌아왔을 때, 파괴될 새 객체의 UI들을 기존 싱글톤이 물려받음
+            Instance.UpdateUIReferences(this);
             Destroy(gameObject);
             return;
         }
+    }
 
-        InitializeFirebase();
+    /// <summary>
+    /// Home 씬이 리로드되었을 때, 기존 파괴된 UI들을 새로운 UI 레퍼런스로 교체하고
+    /// 로그인 상태라면 스플래시 건너뛰기 등 즉시 메인 화면을 표시해주는 함수입니다.
+    /// </summary>
+    public void UpdateUIReferences(FirebaseAuthManager newSceneManager)
+    {
+        this.emailInputField = newSceneManager.emailInputField;
+        this.passwordInputField = newSceneManager.passwordInputField;
+        this.loginButton = newSceneManager.loginButton;
+        this.statusText = newSceneManager.statusText;
+        this.loadingIndicator = newSceneManager.loadingIndicator;
+        this.navigationBar = newSceneManager.navigationBar;
+        this.navigationBarObject = newSceneManager.navigationBarObject;
+        this.loginPanel = newSceneManager.loginPanel;
+        this.splashPanel = newSceneManager.splashPanel;
+        this.myPageProfile = newSceneManager.myPageProfile;
+        this.myPagePlantStats = newSceneManager.myPagePlantStats;
+        this.loginValidator = newSceneManager.loginValidator;
+
+        if (this.loginButton != null)
+        {
+            this.loginButton.onClick.RemoveAllListeners();
+            this.loginButton.onClick.AddListener(this.OnLoginButtonClicked);
+        }
+
+        this.SetLoading(false);
+        this.ClearStatus();
+
+        if (this.IsLoggedIn)
+        {
+            // 이미 로그인 상태로 Home에 도착했으므로 스플래시와 로그인을 꺼버리고 메인 화면으로 전환
+            if (this.splashPanel != null) this.splashPanel.SetActive(false);
+            if (this.loginPanel != null) this.loginPanel.SetActive(false);
+            if (this.navigationBarObject != null) this.navigationBarObject.SetActive(true);
+            if (this.navigationBar != null) this.navigationBar.SelectTab(0);
+
+            // MyPage 데이터 자동 리로드
+            if (this.myPageProfile != null) this.myPageProfile.LoadUserProfile();
+            if (this.myPagePlantStats != null) this.myPagePlantStats.LoadPlantStats();
+        }
+        else
+        {
+            if (this.loginPanel != null) this.loginPanel.SetActive(true);
+            if (this.splashPanel != null) 
+            {
+                this.splashPanel.SetActive(true);
+                StartCoroutine(HideSplashRoutine());
+            }
+        }
     }
 
     private void Start()
     {
+        if (Instance != this) return; // 이미 UpdateUIReferences에서 처리됨
+
         if (loginButton != null)
             loginButton.onClick.AddListener(OnLoginButtonClicked);
 
         SetLoading(false);
         ClearStatus();
+
+        // 밑에 깔려있을 로그인 패널을 미리 켜둠 (스플래시가 꺼졌을 때 자동로그인이 안된 상태면 보이도록)
+        if (loginPanel != null) loginPanel.SetActive(true);
+        
+        // 스플래시 화면을 가장 위에서 2초 동안 띄움
+        if (splashPanel != null) 
+        {
+            splashPanel.SetActive(true);
+            StartCoroutine(HideSplashRoutine());
+        }
+    }
+
+    private System.Collections.IEnumerator HideSplashRoutine()
+    {
+        // 최소 2.0초 동안 스플래시 화면을 유지합니다.
+        yield return new WaitForSeconds(1.5f);
+        
+        if (splashPanel != null) 
+        {
+            // CanvasGroup 컴포넌트가 없으면 추가해서 알파(투명도) 값을 조절할 수 있게 만듭니다
+            CanvasGroup cg = splashPanel.GetComponent<CanvasGroup>();
+            if (cg == null) cg = splashPanel.AddComponent<CanvasGroup>();
+
+            float fadeDuration = 0.5f; // 서서히 사라지는 시간 (0.5초)
+            float elapsed = 0f;
+
+            // 서서히 투명해지도록 애니메이션
+            while (elapsed < fadeDuration)
+            {
+                elapsed += Time.deltaTime;
+                cg.alpha = Mathf.Lerp(1f, 0f, elapsed / fadeDuration);
+                yield return null;
+            }
+            
+            // 완전히 투명해지면 패널을 끄고 다음을 위해 알파값을 다시 1로 복구
+            splashPanel.SetActive(false);
+            cg.alpha = 1f;
+        }
     }
 
     private void Update()
     {
-        // 자동 로그인 대기 중이면 메인 스레드에서 UI 전환 수행
+        // 자동 로그인 성공 시 메인 UI로 전환
         if (pendingAutoLogin)
         {
             pendingAutoLogin = false;
             Debug.Log($"[FirebaseAuthManager] 자동 로그인 처리: {currentUser.Email}");
             GoToMainUI();
+        }
+
+        // 로그인 내역이 없을 때 (스플래시는 2초 뒤 알아서 꺼지고 loginPanel은 밑에 켜져 있으므로 플래그만 소비)
+        if (pendingShowLogin)
+        {
+            pendingShowLogin = false;
         }
     }
 
@@ -129,11 +231,18 @@ public class FirebaseAuthManager : MonoBehaviour
                     Debug.Log($"[FirebaseAuthManager] 이미 로그인됨: {currentUser.Email}");
                     pendingAutoLogin = true; // 메인 스레드에서 UI 전환 예약
                 }
+                else
+                {
+                    // 로그인된 유저가 없으면 로그인 창을 띄움
+                    pendingShowLogin = true;
+                }
             }
             else
             {
                 Debug.LogError($"[FirebaseAuthManager] Firebase 의존성 오류: {dependencyStatus}");
                 isFirebaseReady = false;
+                // 에러가 나도 일단 빈 화면에 멈추면 안되니 로그인 창은 오픈.
+                pendingShowLogin = true;
             }
         });
     }
@@ -191,6 +300,8 @@ public class FirebaseAuthManager : MonoBehaviour
             return;
         }
 
+        Debug.Log($"[FirebaseAuthManager] 로그인 시도 중... 이메일: {email}, 비밀번호 값: '{password}' (길이: {password.Length})");
+
         SetLoading(true);
         if (loginButton != null) loginButton.interactable = false;
         ClearStatus();
@@ -211,14 +322,32 @@ public class FirebaseAuthManager : MonoBehaviour
         {
             string errorMessage = GetFirebaseErrorMessage(ex);
             SetStatus(errorMessage, true);
-            Debug.LogWarning($"[FirebaseAuthManager] Login failed - ErrorCode: {(AuthError)ex.ErrorCode}, Message: {ex.Message}");
+            Debug.LogWarning($"[FirebaseAuthManager] Login failed (FirebaseException) - ErrorCode: {(AuthError)ex.ErrorCode}, Message: {ex.Message}");
             if (ex.InnerException != null)
                 Debug.LogWarning($"[FirebaseAuthManager] InnerException: {ex.InnerException.Message}");
+        }
+        catch (System.AggregateException ex)
+        {
+            // Firebase Task가 실패할 경우 AggregateException으로 포장되어 옵니다.
+            foreach (var innerEx in ex.InnerExceptions)
+            {
+                if (innerEx is FirebaseException fbEx)
+                {
+                    string errorMessage = GetFirebaseErrorMessage(fbEx);
+                    SetStatus(errorMessage, true);
+                    Debug.LogWarning($"[FirebaseAuthManager] Login failed (Aggregate FirebaseException) - ErrorCode: {(AuthError)fbEx.ErrorCode}, Message: {fbEx.Message}\n입력된 비밀번호 길이: {password.Length}");
+                }
+                else
+                {
+                    SetStatus("An error occurred during login.", true);
+                    Debug.LogError($"[FirebaseAuthManager] Aggregate 내부 일반 예외: {innerEx.Message}\n{innerEx.StackTrace}");
+                }
+            }
         }
         catch (System.Exception ex)
         {
             SetStatus("An error occurred during login.", true);
-            Debug.LogError($"[FirebaseAuthManager] 예외 발생: {ex.Message}");
+            Debug.LogError($"[FirebaseAuthManager] 일반 예외 발생: {ex.Message}\n{ex.StackTrace}");
         }
         finally
         {
@@ -272,8 +401,11 @@ public class FirebaseAuthManager : MonoBehaviour
     private string GetPassword()
     {
         if (loginValidator != null)
+        {
             return loginValidator.GetActualPassword();
+        }
 
+        Debug.LogError("[FirebaseAuthManager] 🚨 LoginValidator 스크립트가 인스펙터에 연결되어 있지 않습니다! 로그인 필드의 별표(*) 문자가 그대로 Firebase에 전송되고 있습니다. Inspector에서 LoginValidator 필드에 할당해주세요!");
         return passwordInputField != null ? passwordInputField.text : "";
     }
 
@@ -364,13 +496,7 @@ public class FirebaseAuthManager : MonoBehaviour
     /// </summary>
     private void GoToMainUI()
     {
-        // Firestore 데이터 미리 가져오기 (MyPage 탭 열기 전에 로드)
-        if (myPageProfile != null)
-            myPageProfile.LoadUserProfile();
-
-        if (myPagePlantStats != null)
-            myPagePlantStats.LoadPlantStats();
-
+        // 스플래시는 2초 후 코루틴이 무조건 끄므로 여기서는 로그인 화면만 메인 메뉴로 변경합니다.
         if (loginPanel != null)
             loginPanel.SetActive(false);
 
@@ -379,6 +505,13 @@ public class FirebaseAuthManager : MonoBehaviour
 
         if (navigationBar != null)
             navigationBar.SelectTab(0);
+
+        // UI 전환을 완전히 마친 후 Firestore 데이터 미리 가져오기 진행
+        if (myPageProfile != null)
+            myPageProfile.LoadUserProfile();
+
+        if (myPagePlantStats != null)
+            myPagePlantStats.LoadPlantStats();
     }
 
     #endregion

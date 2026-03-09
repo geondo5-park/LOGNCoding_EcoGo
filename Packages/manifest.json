@@ -1,5 +1,6 @@
 {
   "dependencies": {
+    "com.google.ar.core.arfoundation.extensions": "https://github.com/google-ar/arcore-unity-extensions.git",
     "com.unity.feature.development": "1.0.2",
     "com.unity.inputsystem": "1.15.0",
     "com.unity.learn.iet-framework": "5.0.2",
