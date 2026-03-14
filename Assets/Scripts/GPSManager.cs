@@ -13,6 +13,7 @@ using UnityEngine.XR.ARSubsystems;
 // Google ARCore Geospatial Extensions 패키지
 using Google.XR.ARCoreExtensions;
 using UnityEngine.EventSystems;
+using UnityEngine.UI;
 
 // Android 권한 API는 Android 빌드에서만 사용 가능
 #if UNITY_ANDROID
@@ -43,14 +44,21 @@ public class GPSManager : MonoBehaviour
     public UnityEngine.UI.Image acquiredCardImage;
     [Tooltip("카드 팝업(UI)을 닫을 버튼(X 버튼)")]
     public GameObject closeButton;
+    [Tooltip("카드를 획득했을 때 안내 메시지를 보여줄 텍스트 (예: You have acquired a card!)")]
+    public TMP_Text text_acquisitionStatus;
+
+    public Button button_goToBack;
     private int _spawnedCount = 0;
 
     [Header("AR / Geospatial Settings")]
     [Tooltip("현재 씬의 메인 카메라")]
     public Transform arCamera;
     
-    [Tooltip("식물 등장 반경 (이 반경 내로 접근 시 현실 세계 위치에 카드 앵커를 고정시킵니다. 기본 30~50m 권장)")]
-    public float spawnRadius = 30f;
+    [Tooltip("식물 등장 반경 (이 반경 내로 접근 시 현실 세계 위치에 카드 앵커를 고정시킵니다. 기본 50m 권장)")]
+    public float spawnRadius = 50f;
+
+    [Tooltip("카드를 클릭하여 획득할 수 있는 최소 거리 (이보다 멀면 다가가야 함. 기본 10m)")]
+    public float clickableDistance = 10f;
 
     [Tooltip("스폰될 프리팹의 크기 (기본 0.3f)")]
     public float spawnScale = 0.3f;
@@ -73,12 +81,14 @@ public class GPSManager : MonoBehaviour
     
     // 현재 스폰되어 있는 스폰 오브젝트(카드)들을 추적하기 위한 딕셔너리
     private Dictionary<string, GameObject> spawnedCards = new Dictionary<string, GameObject>();
+    private string _debugMessage = ""; // 디버그용 메시지 저장 변수
 
     void Awake()
     {
         // Manager 자동 탐색 (Inspcctor에서 세팅 못 했을 경우 방지)
-        if (earthManager == null) earthManager = FindObjectOfType<AREarthManager>();
-        if (anchorManager == null) anchorManager = FindObjectOfType<ARAnchorManager>();
+        if (earthManager == null) earthManager = FindFirstObjectByType<AREarthManager>();
+        if (anchorManager == null) anchorManager = FindFirstObjectByType<ARAnchorManager>();
+        button_goToBack.onClick.AddListener(GoBackToHome);
     }
 
     IEnumerator Start()
@@ -242,7 +252,7 @@ public class GPSManager : MonoBehaviour
 
                 if (text_latLong != null)
                 {
-                    text_latLong.text = $"[VPS Active]\nLat: {pose.Latitude:F5} / Lng: {pose.Longitude:F5}";
+                    text_latLong.text = $"[VPS Active]\nLat: {pose.Latitude:F5} / Lng: {pose.Longitude:F5}\n<color=yellow>{_debugMessage}</color>";
                 }
 
                 // 주변 거리를 체크하고 반경 안에 들어오면 실제 현실 지형에 스폰(앵커)
@@ -292,7 +302,19 @@ public class GPSManager : MonoBehaviour
                 CatchCardEffect catchEffect = hit.collider.GetComponent<CatchCardEffect>();
                 if (catchEffect != null)
                 {
-                    catchEffect.OnClicked();
+                    // [핵심] 실제 거리 계산 (카메라와 카드 사이의 월드 거리)
+                    float currentDist = Vector3.Distance(Camera.main.transform.position, hit.collider.transform.position);
+
+                    if (currentDist <= clickableDistance)
+                    {
+                        // 10m 이내일 때만 획득 애니메이션 실행
+                        catchEffect.OnClicked();
+                    }
+                    else
+                    {
+                        // 너무 멀면 무시 (디버그 로그만 남김)
+                        Debug.Log($"[GPSManager] 거리 부족으로 획득 실패 (현재: {currentDist:F1}m / 목표: {clickableDistance}m)");
+                    }
                 }
             }
         }
@@ -301,6 +323,7 @@ public class GPSManager : MonoBehaviour
     private PlantData _nearestPlant;
     private Queue<PlantData> _spawnQueue = new Queue<PlantData>();
     private bool _isSpawningFromQueue = false;
+    private Dictionary<string, float> _spawnCooldowns = new Dictionary<string, float>();
 
     private void CheckProximity(double myLat, double myLong)
     {
@@ -317,10 +340,15 @@ public class GPSManager : MonoBehaviour
                 _nearestPlant = plant;
             }
 
+
             // 한꺼번에 스폰하면 ARCore 위성 시스템이 과부하로 뻗으므로, 순차적으로 큐에 담아서 스폰
-            if (!plant.isSpawned && !_spawnQueue.Contains(plant))
+            // [수정] 스폰 반경(spawnRadius) 안에 들어왔을 때만 스폰을 시도하도록 조건 추가!
+            if (dist <= spawnRadius && !plant.isSpawned && !_spawnQueue.Contains(plant))
             {
-                _spawnQueue.Enqueue(plant);
+                if (!_spawnCooldowns.ContainsKey(plant.id) || Time.time > _spawnCooldowns[plant.id])
+                {
+                    _spawnQueue.Enqueue(plant);
+                }
             }
         }
 
@@ -334,7 +362,15 @@ public class GPSManager : MonoBehaviour
             if (_nearestPlant != null)
             {
                 string dirStr = GetDirection(myLat, myLong, _nearestPlant.lat, _nearestPlant.lng);
-                text_remainDistance.text = $"[가장 가까운 목표] {dirStr} {minDistance:F1}m\n화살표 방향으로 가서 스폰된 카드를 터치하세요!";
+                // 현재 씬에 실제로 존재하고 활성화된 카드의 개수를 파악합니다.
+                int activeSpawnedCount = 0;
+                foreach(var card in spawnedCards.Values) {
+                    if(card != null && card.activeInHierarchy) activeSpawnedCount++;
+                }
+
+                text_remainDistance.text = $"[가장 가까운 목표] {dirStr} {minDistance:F1}m\n" +
+                                           $"<b>(현재 필드: {activeSpawnedCount}개 / 누적 생성: {_spawnedCount}개)</b>\n" +
+                                           $"주변을 둘러보며 카드를 찾아보세요!";
             }
             else
             {
@@ -351,7 +387,6 @@ public class GPSManager : MonoBehaviour
         {
             PlantData plantToSpawn = _spawnQueue.Dequeue();
             plantToSpawn.isSpawned = true; // 스폰 시도 중으로 마킹
-            _spawnedCount++;
             
             yield return StartCoroutine(SpawnPlantOnTerrain(plantToSpawn));
             
@@ -381,50 +416,218 @@ public class GPSManager : MonoBehaviour
     // ARCore Streetscape Geometry(지리적 지형)를 활용해 카드를 해당 바닥에 고정하는 코루틴
     private IEnumerator SpawnPlantOnTerrain(PlantData plant)
     {
-        if (cardPrefab == null) yield break;
+        if (cardPrefab == null)
+        {
+            Debug.LogError("[GPSManager] cardPrefab이 할당되지 않았습니다. Resources에서 로드 시도 중...");
+            cardPrefab = Resources.Load<GameObject>("Prefabs/CardPrefab");
+            if (cardPrefab == null)
+            {
+                // 최후의 수단: Quad라도 생성
+                cardPrefab = GameObject.CreatePrimitive(PrimitiveType.Quad);
+                cardPrefab.name = "DummyCardPrefab";
+                cardPrefab.SetActive(false); // 템플릿용이므로 비활성화
+            }
+        }
 
-        // 현재 유저(카메라)의 고도를 가져와서 카드가 눈높이 수평에 있도록 앵커 생성
-        double currentAltitude = earthManager.CameraGeospatialPose.Altitude;
-        
-        // 너무 높거나 낮으면 안 보이므로 정확히 유저 카메라 고도와 동일하게 세팅
-        ARGeospatialAnchor earthAnchor = anchorManager.AddAnchor(plant.lat, plant.lng, currentAltitude, Quaternion.identity);
+        ARGeospatialAnchor earthAnchor = null;
+        GameObject spawnedObj = null;
+        Transform camTrans = (arCamera != null) ? arCamera : Camera.main.transform;
+
+        // 1. 지구 트래킹이 정상일 때만 앵커 추가 시도
+        if (earthManager != null && earthManager.EarthTrackingState == TrackingState.Tracking)
+        {
+            GeospatialPose pose = earthManager.CameraGeospatialPose;
+            double currentAltitude = pose.Altitude;
+            
+            try
+            {
+                if (anchorManager != null && anchorManager.subsystem != null && anchorManager.subsystem.running)
+                {
+                    // 정확도가 충분할 때만 앵커 생성을 시도하여 불필요한 실패 방지 (필요 시 주석 해제)
+                    // if (pose.HorizontalAccuracy < 15.0f && pose.VerticalAccuracy < 15.0f) 
+                    earthAnchor = anchorManager.AddAnchor(plant.lat, plant.lng, currentAltitude, Quaternion.identity);
+                }
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogWarning($"[GPSManager] AddAnchor 예외 발생 (Fallback 스폰 진행): {e.Message}");
+            }
+        }
 
         if (earthAnchor != null)
         {
             // 스폰 성공: 앵커의 자식으로 등록되어 카메라가 아닌 "실제 지형 좌표"에 고정됨
-            GameObject spawnedObj = Instantiate(cardPrefab, earthAnchor.transform.position, earthAnchor.transform.rotation, earthAnchor.transform);
-            
-            // 너무 크면 카메라를 덮어버리고, 작으면 안보이므로 3배 크기로 일단 띄움
-            spawnedObj.transform.localScale = Vector3.one * (spawnScale * 3.0f); 
-
-            // 3. 카드가 항상 사용자를 바라보게 만드는 스크립트 추가
-            if (spawnedObj.GetComponent<FaceCameraAR>() == null)
+            spawnedObj = Instantiate(cardPrefab, earthAnchor.transform.position, earthAnchor.transform.rotation, earthAnchor.transform);
+            _debugMessage = $"'{plant.id}' 앵커 스폰 성공!";
+            Debug.Log($"[GPSManager] '{plant.id}' 카드가 실제 지형 앵커에 스폰되었습니다!");
+        }
+        else
+        {
+            // 2. Fallback: 앵커 생성이 실패하면 카메라 기준 상대 좌표로 강제 스폰
+            if (earthManager != null && earthManager.EarthTrackingState == TrackingState.Tracking)
             {
-                spawnedObj.AddComponent<FaceCameraAR>();
+                GeospatialPose myPose = earthManager.CameraGeospatialPose;
+                
+                // 위도/경도 차이를 미터 단위로 대략 계산
+                double dLat = plant.lat - myPose.Latitude;
+                double dLng = plant.lng - myPose.Longitude;
+                
+                // 1도당 미터 환산 (대략적)
+                float zMeters = (float)(dLat * 111319.9);
+                float xMeters = (float)(dLng * 111319.9 * Math.Cos(myPose.Latitude * Math.PI / 180.0));
+                
+                // ARCore Geospatial에서는 X=East, Z=North로 정렬됨
+                Vector3 spawnAt = camTrans.position + new Vector3(xMeters, -0.5f, zMeters);
+                
+                // 앵커 대신 직접 생성 후 ARAnchor 컴포넌트 추가 (Extension 메서드와의 이름 충돌 방지)
+                spawnedObj = Instantiate(cardPrefab, spawnAt, Quaternion.identity);
+                if (spawnedObj.GetComponent<ARAnchor>() == null)
+                {
+                    spawnedObj.AddComponent<ARAnchor>();
+                }
+                _debugMessage = $"'{plant.id}' 일반 로컬 스폰 성공!";
+                Debug.Log($"[GPSManager] '{plant.id}' 앵커 생성 실패로 인해 일반 좌표에 생성 후 ARAnchor를 부여했습니다.");
+                
+                // 카드 명단에 등록
+                if (spawnedObj != null && !spawnedCards.ContainsKey(plant.id))
+                {
+                    spawnedCards.Add(plant.id, spawnedObj);
+                }
             }
+        }
+
+        if (spawnedObj != null)
+        {
+            spawnedObj.SetActive(true);
+            _spawnedCount++; // 실제 생성 성공 시에만 카운트 증가
             
+            // 프리팹 내부의 Dummy 등의 잔재 제거
+            if (spawnedObj.name == "DummyCardPrefab") spawnedObj.name = $"Card_{plant.id}";
+
+            // [개선] 로컬 좌표 초기화
+            if (spawnedObj.transform.parent != null)
+            {
+                spawnedObj.transform.localPosition = Vector3.zero;
+                spawnedObj.transform.localRotation = Quaternion.identity;
+            }
+
+            // 한 번만 카메라를 바라보도록 초기 회전 설정 (계속 따라다니지 않음)
+            Vector3 lookDir = spawnedObj.transform.position - camTrans.position;
+            lookDir.y = 0; // 수직 유지
+            if (lookDir != Vector3.zero)
+            {
+                spawnedObj.transform.rotation = Quaternion.LookRotation(lookDir);
+            }
+
+            // 거리 및 위치 차이 디버그 로그
+            Vector3 camPos = camTrans.position;
+            float debugDist = Vector3.Distance(camPos, spawnedObj.transform.position);
+            Debug.Log($"[GPSManager] '{plant.id}' 렌더링 완료. 카메라 위치: {camPos}, 실제 거리: {debugDist:F1}m");
+
             // 4. 둥실둥실 효과 추가
             if (spawnedObj.GetComponent<FloatingEffect>() == null)
             {
                 spawnedObj.AddComponent<FloatingEffect>();
             }
 
-            // 5. 식물 Sprite 로드
+            // 5. 식물 텍스처(이미지) 로드
+            Texture2D plantTexture = null;
             Sprite plantSprite = Resources.Load<Sprite>($"Plants/{plant.id}");
-            SpriteRenderer renderer = spawnedObj.GetComponent<SpriteRenderer>();
-            if (renderer == null) renderer = spawnedObj.GetComponentInChildren<SpriteRenderer>();
+            if (plantSprite != null)
+            {
+                plantTexture = plantSprite.texture;
+            }
+            else
+            {
+                plantTexture = Resources.Load<Texture2D>($"Plants/{plant.id}");
+            }
 
-            if (plantSprite != null && renderer != null)
-                renderer.sprite = plantSprite;
+            // 2D 스프라이트 렌더러가 존재하면 삭제 (3D 객체로 사용할 것이므로)
+            SpriteRenderer sprRenderer = spawnedObj.GetComponent<SpriteRenderer>();
+            if (sprRenderer == null) sprRenderer = spawnedObj.GetComponentInChildren<SpriteRenderer>();
+            if (sprRenderer != null) Destroy(sprRenderer);
 
-            // 6. 클릭을 위한 콜라이더 추가
+            // 3D 메쉬 렌더러와 필터 세팅
+            MeshRenderer meshRenderer = spawnedObj.GetComponent<MeshRenderer>();
+            if (meshRenderer == null) meshRenderer = spawnedObj.GetComponentInChildren<MeshRenderer>();
+            
+            MeshFilter meshFilter = spawnedObj.GetComponent<MeshFilter>();
+            if (meshFilter == null) meshFilter = spawnedObj.GetComponentInChildren<MeshFilter>();
+
+            // 스폰 객체가 3D 구조가 아니면 기본 Quad 형태로 생성
+            if (meshRenderer == null)
+            {
+                if (meshFilter == null) meshFilter = spawnedObj.AddComponent<MeshFilter>();
+                
+                GameObject quad = GameObject.CreatePrimitive(PrimitiveType.Quad);
+                meshFilter.mesh = quad.GetComponent<MeshFilter>().sharedMesh;
+                Destroy(quad);
+
+                meshRenderer = spawnedObj.AddComponent<MeshRenderer>();
+                // [수정] 조명을 완전히 무시하고 가장 밝게 출력되는 URP/Unlit 또는 Unlit/Transparent 적용
+                Shader unlitShader = Shader.Find("Universal Render Pipeline/Unlit");
+                if (unlitShader == null) unlitShader = Shader.Find("Unlit/Transparent");
+                
+                meshRenderer.material = new Material(unlitShader);
+                // URP Unlit의 경우 Transparent 설정을 위해 키워드 및 태그 설정이 필요할 수 있으나, 기본적으로 Texture만 잘 나와도 됨
+                if (unlitShader.name.Contains("Universal Render Pipeline"))
+                {
+                    meshRenderer.material.SetFloat("_Surface", 1); // 1 is Transparent
+                    meshRenderer.material.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
+                    meshRenderer.material.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+                    meshRenderer.material.SetInt("_ZWrite", 0);
+                    meshRenderer.material.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
+                    meshRenderer.material.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent;
+                }
+            }
+
+            if (plantTexture != null && meshRenderer != null)
+            {
+                // 머티리얼에 카드 이미지 적용 (URP는 _BaseMap, 레거시는 _MainTex)
+                if (meshRenderer.material.HasProperty("_BaseMap"))
+                    meshRenderer.material.SetTexture("_BaseMap", plantTexture);
+                else
+                    meshRenderer.material.mainTexture = plantTexture;
+                
+                meshRenderer.material.color = Color.white; // 밝기 100% 보장
+
+                // 텍스처의 원본 종횡비(Aspect Ratio)를 계산하여 객체 스케일에 반영
+                float aspect = (float)plantTexture.width / plantTexture.height;
+                
+                // 야외에서 잘 보이도록 기본 스케일 (25.0f)
+                float targetScale = spawnScale * 25.0f;
+                spawnedObj.transform.localScale = new Vector3(targetScale * aspect, targetScale, 1.0f);
+            }
+            else
+            {
+                spawnedObj.transform.localScale = Vector3.one * (spawnScale * 25.0f);
+            }
+
+            // [추가] 실시간 카메라 바라보기 효과 (밝기와 시인성을 위해 필수)
+            if (spawnedObj.GetComponent<FaceCameraAR>() == null)
+            {
+                spawnedObj.AddComponent<FaceCameraAR>();
+            }
+
+            // 6. 클릭을 위한 콜라이더 추가 (3D 형태 반영)
             BoxCollider boxCol = spawnedObj.GetComponent<BoxCollider>();
             if (boxCol == null) boxCol = spawnedObj.AddComponent<BoxCollider>();
             
-            if (renderer != null && renderer.sprite != null)
-                boxCol.size = new Vector3(renderer.sprite.bounds.size.x * 2.0f, renderer.sprite.bounds.size.y * 2.0f, 0.5f);
+            if (meshFilter != null && meshFilter.sharedMesh != null)
+            {
+                Vector3 boundsSize = meshFilter.sharedMesh.bounds.size;
+                // 터치를 쉽게 하기 위해 콜라이더 크기를 메쉬 원본보다 폭과 높이를 2배 넓게 잡아줍니다. (두께는 최소 0.5f 지정)
+                boxCol.size = new Vector3(
+                    boundsSize.x > 0 ? boundsSize.x * 2.0f : 2.5f, 
+                    boundsSize.y > 0 ? boundsSize.y * 2.0f : 2.5f, 
+                    Mathf.Max(boundsSize.z, 0.5f)
+                );
+            }
             else
+            {
+                // 기본 임의 크기 할당
                 boxCol.size = new Vector3(2.5f, 2.5f, 0.5f);
+            }
 
             // 7. 획득 이펙트 컴포넌트 추가
             CatchCardEffect catchEffect = spawnedObj.GetComponent<CatchCardEffect>();
@@ -433,18 +636,20 @@ public class GPSManager : MonoBehaviour
             catchEffect.gpsManager = this;
             catchEffect.plantId = plant.id;
             
-            // 네비게이션을 위해 등록
+            // 네비게이션을 위해 등록 (Fallback에서 이미 등록했을 수 있으므로 체크)
             if (!spawnedCards.ContainsKey(plant.id))
             {
                 spawnedCards.Add(plant.id, spawnedObj);
             }
-
-            Debug.Log($"[GPSManager] '{plant.id}' 카드가 엑셀 기반 실제 지형 위경도 앵커에 스폰되었습니다!");
+            
+            _spawnCooldowns.Remove(plant.id);
         }
         else
         {
-            Debug.LogWarning($"[GPSManager] '{plant.id}' 앵커 생성 실패. 다음 프레임에 다시 시도합니다.");
-            plant.isSpawned = false;
+            _debugMessage = $"'{plant.id}' 스폰 실패. 재시도 중...";
+            Debug.LogWarning($"[GPSManager] '{plant.id}' 생성 실패. 5초 후 다시 시도합니다.");
+            plant.isSpawned = false; // 실패했으므로 추후 재시도 가능하도록 리셋
+            _spawnCooldowns[plant.id] = Time.time + 5f;
         }
 
         yield return null;
@@ -519,6 +724,8 @@ public class GPSManager : MonoBehaviour
     public void ShowAcquiredCardUI(string plantId)
     {
         if (cardPopup != null) cardPopup.SetActive(true);
+        if (text_acquisitionStatus != null) text_acquisitionStatus.text = "You have acquired a new plant card!";
+        
         if (acquiredCardImage != null)
         {
             acquiredCardImage.gameObject.SetActive(true);
@@ -606,20 +813,13 @@ public class FaceCameraAR : MonoBehaviour
     {
         if (camTransform != null)
         {
-            // 스프라이트가 카메라 정면을 바라보게 회전 (Vector3 반대 방향)
-            transform.rotation = Quaternion.LookRotation(transform.position - camTransform.position);
+            // 스프라이트가 카메라를 바라보되, Y축 방향만 회전하도록 설정 (수직 유지)
+            Vector3 lookDir = transform.position - camTransform.position;
+            lookDir.y = 0; // Y축 방향 고정 (위아래로 기울어지지 않게)
             
-            // 물리적인 거리가 아주 멀어도 화면에서는 일정 크기 이상으로 보이게 하기 위해
-            // 15m 이상 떨어져 있으면 거리에 비례해서 크기를 강제로 키워버립니다 (시각적 크기 유지)
-            float dist = Vector3.Distance(transform.position, camTransform.position);
-            if (dist > 15f)
+            if (lookDir != Vector3.zero)
             {
-                float scaleMulti = 1f + ((dist - 15f) * 0.15f); 
-                transform.localScale = initialScale * scaleMulti;
-            }
-            else
-            {
-                transform.localScale = initialScale;
+                transform.rotation = Quaternion.LookRotation(lookDir);
             }
         }
     }

@@ -1,7 +1,6 @@
 <dependencies>
   <packages>
     <package>com.google.android.gms:play-services-base:18.10.0</package>
-    <package>com.google.android.gms:play-services-location:17+</package>
     <package>com.google.firebase:firebase-analytics:23.0.0</package>
     <package>com.google.firebase:firebase-app-unity:13.7.0</package>
     <package>com.google.firebase:firebase-auth:24.0.1</package>
